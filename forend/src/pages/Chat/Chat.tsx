@@ -42,6 +42,7 @@ export default function Chat() {
   // ---------------- DOM Refs (添加对应 HTML 元素的泛型) ----------------
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // ================= 核心修改：开局读取数据库 =================
   useEffect(() => {
@@ -260,6 +261,16 @@ export default function Chat() {
     }
   };
 
+  // 【新增功能】：中止流式传输
+  const handleStopStreaming = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setIsStreaming(false);
+      console.log('用户中止了流式传输');
+    }
+  };
+
   // 【新增方法】：调用真实后端流式接口
   const updateAiTextInState = (
       sessionId: string,
@@ -289,12 +300,17 @@ export default function Chat() {
     llmSessionId: string | null,   // 👈 新增参数
     modelName: string              // 👈 新增参数
   ) => {
+    // 创建新的 AbortController
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    
     try {
       await sendStreamMessage({
         conversationId: sessionId,
         content: text,
         current_session_id: llmSessionId,
         current_model_name: modelName,
+        signal: abortController.signal,
         onSessionId: (newId: string) => {
           console.log("太棒了！组件接收到了底层的 Session ID:", newId);
           // 更新 React 状态，把刚刚创建的那个 current_session_id: null 的气泡填上真正的 ID
@@ -316,15 +332,23 @@ export default function Chat() {
           // 直接覆盖当前气泡的文本
           updateAiTextInState(sessionId, aiMessageId, accumulatedText);
         },
+        onFinish: () => {
+          console.log("流式响应已完成");
+          setIsStreaming(false);
+          abortControllerRef.current = null;
+        },
         onError: (error: unknown) => {
           console.error(error); 
           updateAiTextInState(sessionId, aiMessageId, "\n\n[网络请求出错]");
+          setIsStreaming(false);
+          abortControllerRef.current = null;
         }
       });
     } catch (error) {
       console.error("对话流中断", error);
     } finally {
       setIsStreaming(false);
+      abortControllerRef.current = null;
     }
   };
 
@@ -635,6 +659,19 @@ export default function Chat() {
                     <path d="M3 20V4l19 8-19 8zm2-3l11.85-5L5 7v3.5l6 1.5-6 1.5V17z" />
                   </svg>
                 </button>
+
+                {/* 停止按钮 - 当流式传输进行中时显示 */}
+                {isStreaming && (
+                  <button
+                    onClick={handleStopStreaming}
+                    className="p-2 rounded-full flex items-center justify-center transition bg-black text-white hover:bg-gray-800 shadow-md"
+                    title="停止生成"
+                  >
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                      <rect x="6" y="6" width="12" height="12" />
+                    </svg>
+                  </button>
+                )}
               </div>
             </div>
             

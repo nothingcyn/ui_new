@@ -22,6 +22,7 @@ export interface SendStreamMessageParams {
   content: string;
   current_session_id: string | null; // 用户输入内容
   current_model_name: string;         // 当前选择的模型名字
+  signal?: AbortSignal;               // 中止信号
   // ✅ 流式回调（核心）
   onMessage: (fullText: string) => void;
   onSessionId?: (sessionId: string) => void; 

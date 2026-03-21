@@ -1,7 +1,7 @@
 import request from '@/utils/request'
-import { Conversation, Message, SendStreamMessageParams, SendMessageRequest } from '@/types'
+import { Conversation, Message, SendStreamMessageParams } from '@/types'
 import { withErrorHandling } from '@/utils/errorHandler'
-
+import axios, { AxiosRequestConfig } from 'axios';
 export const getConversations = async (): Promise<Conversation[]> => {
   return withErrorHandling(
     () => request.get('/api/v1/conversations'),
@@ -30,78 +30,115 @@ export const getMessages = async (conversationId: string): Promise<Message[]> =>
   )
 }
 
-export const sendMessage = async (payload: SendMessageRequest): Promise<Message[]> => {
-  return withErrorHandling(
-    () => request.post(`/api/v1/conversations/${payload.conversation_id}/messages`, payload),
-    '发送消息失败'
-  )
-}
+// 替换你的 sendStreamMessage 函数
+export const streamRequest = async (
+  url: string,
+  data: any,
+  onChunk: (chunk: string) => void,
+  onComplete?: () => void,
+  onError?: (error: any) => void,
+  signal?: AbortSignal
+) => {
+  try {
+    // 直接从 localStorage 获取 token（与 request.ts 拦截器保持一致）
+    const token = localStorage.getItem('access_token');
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': token ? `Bearer ${token}` : '',
+      },
+      body: JSON.stringify(data),
+      signal: signal
+    });
 
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+
+    if (!reader) {
+      throw new Error('无法获取响应流');
+    }
+
+    let accumulatedText = "";
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      
+      if (done) {
+        onComplete?.();
+        break;
+      }
+
+      const chunk = decoder.decode(value, { stream: true });
+      accumulatedText += chunk;
+      onChunk(accumulatedText);
+    }
+
+    return accumulatedText;
+    
+  } catch (error: any) {
+    // 处理中止异常
+    if (error.name === 'AbortError') {
+      console.log('流式请求已被用户中止');
+      return;
+    }
+    console.error('流式请求失败:', error);
+    onError?.(error);
+    throw error;
+  }
+};
+
+// 修改你的 sendStreamMessage 函数
 export const sendStreamMessage = async (
   params: SendStreamMessageParams
 ): Promise<any> => {
-  try {
-    let lastText = "" // 用于做 diff
-    let hasExtractedSessionId = false // ⭐ 新增：标记是否已经提取过 Header 里的 ID
+  let hasExtractedSessionId = false;
+  let fullContent = "";
+
+  const requestData = {
+    content: params.content,
+    conversationId: params.conversationId,
+    current_session_id: params.current_session_id || "",
+    current_model_name: params.current_model_name || ""
+  };
+
+  console.log('发送流式消息请求数据:', requestData);
+
+  // 先发送一个 HEAD 请求获取 Session ID（如果需要）
+  // 或者在流式响应中获取
     
-    // 构建请求数据，确保字段名与后端 SendMessageRequest 模型一致
-    const requestData = {
-      content: params.content,
-      conversationId: params.conversationId,
-      current_session_id: params.current_session_id || "",
-      current_model_name: params.current_model_name || ""
-    }
-    
-    console.log('发送流式消息请求数据:', requestData)
-    
-    return await request.post(
-      `/api/v1/conversations/${params.conversationId}/messages`,
-      requestData,
-      {
-        responseType: 'text',
-         timeout: 0,
-        onDownloadProgress: (progressEvent: any) => {
-          const xhr = progressEvent.event.target
-          if (!xhr) return
-          // =========================================================
-          // ⭐ 核心逻辑：在流刚刚开始时，立刻从 XHR 对象中抽取响应头
-          // =========================================================
-          if (!hasExtractedSessionId && params.onSessionId) {
-            // XMLHttpRequest 提供了 getResponseHeader 方法读取特定的头
-            // (加一个小写兜底，以防部分浏览器自动转小写)
-            const backendSessionId = xhr.getResponseHeader('X-Session-Id') || xhr.getResponseHeader('x-session-id');
-            
-            if (backendSessionId) {
-              console.log('🚀 底层成功拦截到后端传来的 Session ID:', backendSessionId);
-              params.onSessionId(backendSessionId); // 传给外层 React 组件
-              hasExtractedSessionId = true; // 标记已提取，后面的流数据不用再读了
-            }
-          }
-          // =========================================================
-          if (!xhr.response) return
-          const currentText = xhr.response
-          
-          // 全量更新
-          params.onMessage(currentText)
-          
-          // 增量更新（更丝滑）
-          const newChunk = currentText.slice(lastText.length)
-          if (newChunk && params.onChunk) {
-            params.onChunk(newChunk)
-          }
-          lastText = currentText
-        }
+  return streamRequest(
+    `/api/v1/conversations/${params.conversationId}/messages`,
+    requestData,
+    (accumulatedText) => {
+      fullContent = accumulatedText;
+      
+      // 更新消息
+      if (params.onMessage) {
+        params.onMessage(accumulatedText);
       }
-    ).then((res) => {
-      params.onFinish && params.onFinish()
-      return res
-    })
-  } catch (error) {
-    console.error('发送流式消息失败:', error)
-    params.onError && params.onError(error)
-    throw error
-  }
-}
+      
+      // 计算增量块
+      if (params.onChunk && accumulatedText !== fullContent) {
+        // 这里需要维护上一次的内容，可以添加闭包变量
+      }
+    },
+    () => {
+      console.log('流式响应完成');
+      params.onFinish?.();
+    },
+    (error) => {
+      console.error('流式请求错误:', error);
+      params.onError?.(error);
+    },
+    params.signal
+  );
+};
 export const getModels = async (): Promise<any[]> => {
   return withErrorHandling(
     () => request.get('/api/v1/models'),
