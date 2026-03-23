@@ -1,0 +1,1 @@
+import{c as e,s as t}from"./authService-De4zHq3w.js";var n=async()=>t(()=>e.get(`/api/v1/users/me`),`获取用户信息失败`),r=async n=>t(()=>e.put(`/api/v1/users/me`,n),`更新用户资料失败`),i=async n=>t(()=>e.post(`/api/v1/users/change-password`,n),`修改密码失败`);export{n,r,i as t};

@@ -1,0 +1,1 @@
+import{a as e,o as t}from"./redux-toolkit.modern-Ew20F1Yf.js";var n=()=>e(),r=t;export{r as n,n as t};
